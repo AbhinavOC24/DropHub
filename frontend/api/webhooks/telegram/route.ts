@@ -10,7 +10,7 @@ export async function POST(req: Request) {
 
   let slug: string | undefined;
 
-  // 🟢 Case 1: /start subscribe_slug (deep link)
+  //  /start subscribe_slug (deep link)
   if (text.startsWith("/start")) {
     const args = text.split(" ");
     const param = args[1]; // e.g. "subscribe_lunargear"
@@ -19,13 +19,13 @@ export async function POST(req: Request) {
     }
   }
 
-  // 🟢 Case 2: /subscribe slug (manual command)
+  // /subscribe slug (manual command)
   if (text.startsWith("/subscribe")) {
     const args = text.split(" ");
     slug = args[1]; // "lunargear"
   }
 
-  // No slug → show usage
+  // No slug -show usage
   if (!slug) {
     await axios.post(
       `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
@@ -37,20 +37,20 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false });
   }
 
-  // 🔍 Look up store
+  // Look up store
   const store = await prisma.store.findUnique({ where: { slug } });
   if (!store) {
     await axios.post(
       `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
       {
         chat_id: update.message.chat.id,
-        text: `❌ Store '${slug}' not found`,
+        text: `❌Store '${slug}' not found`,
       }
     );
     return NextResponse.json({ ok: false });
   }
 
-  // 📝 Save subscription (upsert so re-subscribing doesn’t error)
+  // Save subscription (upsert so re-subscribing doesn’t error)
   await prisma.subscription.upsert({
     where: {
       storeId_platform_externalUserId: {
@@ -68,7 +68,7 @@ export async function POST(req: Request) {
     update: {}, // nothing to update
   });
 
-  // 🎉 Confirmation
+  // Confirmation
   await axios.post(
     `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
     {
