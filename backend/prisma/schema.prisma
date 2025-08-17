@@ -9,33 +9,32 @@ datasource db {
 }
 
 model Drop {
-  id          String    @id
+  id          String   @id @default(cuid())   // auto-generate ID
+
   storeId     String
   title       String
   description String
   price       String
   imageUrl    String?
   productUrl  String
-  publishedAt DateTime?
   createdAt   DateTime  @default(now())
   Store       Store     @relation(fields: [storeId], references: [id])
 }
 
 model Store {
-  id           String         @id
+  id           String          @id @default(cuid())
   slug         String         @unique
   name         String
   ownerId      String
   createdAt    DateTime       @default(now())
-  updatedAt    DateTime
   Drop         Drop[]
   User         User           @relation(fields: [ownerId], references: [id])
   Subscription Subscription[]
 }
 
 model Subscription {
-  id             String   @id
-  storeId        String
+  id             String   @id @default(cuid())
+  storeId        String   
   platform       String
   externalUserId String
   username       String?
