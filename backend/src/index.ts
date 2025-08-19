@@ -11,12 +11,14 @@ import {
   StoreSchema,
   StoreUpdateSchema,
 } from "./zod/validations";
+import bcrypt from "bcrypt";
 
 import {
   sendMessage,
   handleSubscribe,
   handleUnsubscribe,
 } from "./util/notif/index";
+import { requireAuth } from "./middleware/requireAuth";
 
 dotenv.config();
 const app = express();
@@ -44,30 +46,34 @@ app.listen(`${process.env.BACKEND_PORT}`, () => {
 });
 
 // create store
-app.post("/store/createstore", async (req: Request, res: Response) => {
-  try {
-    const parsed = StoreSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res
-        .status(400)
-        .json({ error: "Invalid inputs", details: parsed.error });
+app.post(
+  "/store/createstore",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const parsed = StoreSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res
+          .status(400)
+          .json({ error: "Invalid inputs", details: parsed.error });
+      }
+
+      const { slug, name, ownerId, description, imageUrl, tags } = parsed.data;
+
+      const exist = await prisma.store.findFirst({ where: { slug } });
+      if (exist) return res.status(400).json({ error: "Store already exists" });
+
+      const store = await prisma.store.create({
+        data: { slug, name, ownerId, description, imageUrl, tags },
+      });
+
+      return res.status(201).json({ store });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ error: "Something went wrong" });
     }
-
-    const { slug, name, ownerId, description, imageUrl, tags } = parsed.data;
-
-    const exist = await prisma.store.findFirst({ where: { slug } });
-    if (exist) return res.status(400).json({ error: "Store already exists" });
-
-    const store = await prisma.store.create({
-      data: { slug, name, ownerId, description, imageUrl, tags },
-    });
-
-    return res.status(201).json({ store });
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ error: "Something went wrong" });
   }
-});
+);
 
 //get store by slug
 app.get("/store/:slug", async (req, res) => {
@@ -93,7 +99,7 @@ app.get("/stores/:ownerId", async (req, res) => {
 });
 
 //update store details
-app.put("/store/:id", async (req, res) => {
+app.put("/store/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const parsed = StoreUpdateSchema.safeParse(req.body);
@@ -103,6 +109,10 @@ app.put("/store/:id", async (req, res) => {
         .json({ error: "Invalid inputs", details: parsed.error });
     }
 
+    if (!id) {
+      res.status(400).json({ error: "ID required" });
+      return;
+    }
     const store = await prisma.store.update({
       where: { id },
       data: parsed.data as Prisma.StoreUpdateInput,
@@ -114,9 +124,14 @@ app.put("/store/:id", async (req, res) => {
   }
 });
 //delete a store
-app.delete("/store/:id", async (req, res) => {
+app.delete("/store/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (!id) {
+      res.status(400).json({ error: "ID required" });
+      return;
+    }
     await prisma.store.delete({ where: { id } });
     res.json({ message: "Store deleted" });
   } catch (err) {
@@ -124,7 +139,7 @@ app.delete("/store/:id", async (req, res) => {
   }
 });
 // create drop
-app.post("/drop/create", async (req: Request, res: Response) => {
+app.post("/drop/create", requireAuth, async (req: Request, res: Response) => {
   try {
     const parsed = DropSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -264,4 +279,65 @@ app.post("/webhook/telegram", async (req: Request, res: Response) => {
     console.error(err);
     return res.status(500).json({ ok: false });
   }
+});
+
+// Signup
+app.post("/auth/signup", async (req: Request, res: Response) => {
+  try {
+    const { email, password, username } = req.body;
+    if (!email || !password || !username)
+      return res.status(400).json({ error: "Email & password required" });
+
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing)
+      return res.status(400).json({ error: "Email already in use" });
+
+    const hashed = await bcrypt.hash(password, 10);
+
+    const user = await prisma.user.create({
+      data: { email, password: hashed },
+    });
+
+    req.session.userId = user.id;
+
+    res.status(201).json({
+      message: "Signup successful",
+      user: { id: user.id, email: user.email },
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Login
+app.post("/auth/login", async (req: Request, res: Response) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password)
+      return res.status(400).json({ error: "Email & password required" });
+
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) return res.status(400).json({ error: "Invalid credentials" });
+
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) return res.status(400).json({ error: "Invalid credentials" });
+
+    req.session.userId = user.id; // 👈 session set
+
+    res.json({
+      message: "Login successful",
+      user: { id: user.id, email: user.email },
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Logout
+app.post("/auth/logout", (req: Request, res: Response) => {
+  req.session.destroy((err) => {
+    if (err) return res.status(500).json({ error: "Logout failed" });
+    res.clearCookie("connect.sid"); // default cookie name
+    res.json({ message: "Logged out" });
+  });
 });
