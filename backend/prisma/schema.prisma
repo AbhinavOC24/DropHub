@@ -10,7 +10,6 @@ datasource db {
 
 model Drop {
   id          String   @id @default(cuid())   // auto-generate ID
-
   storeId     String
   title       String
   description String
@@ -26,6 +25,9 @@ model Store {
   slug         String         @unique
   name         String
   ownerId      String
+  description String?
+  imageUrl     String?
+  tags        String[]
   createdAt    DateTime       @default(now())
   Drop         Drop[]
   User         User           @relation(fields: [ownerId], references: [id])

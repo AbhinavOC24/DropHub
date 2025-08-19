@@ -4,8 +4,20 @@ import cors from "cors";
 import session from "express-session";
 import { Request, Response } from "express";
 import prisma from "./lib/prisma";
-import { DropSchema, StoreSchema } from "./zod/validations";
-import axios from "axios";
+import { Prisma } from "@prisma/client";
+import {
+  DropSchema,
+  DropUpdateSchema,
+  StoreSchema,
+  StoreUpdateSchema,
+} from "./zod/validations";
+
+import {
+  sendMessage,
+  handleSubscribe,
+  handleUnsubscribe,
+} from "./util/notif/index";
+
 dotenv.config();
 const app = express();
 
@@ -31,6 +43,7 @@ app.listen(`${process.env.BACKEND_PORT}`, () => {
   console.log(`Running on ${process.env.BACKEND_PORT}`);
 });
 
+// create store
 app.post("/store/createstore", async (req: Request, res: Response) => {
   try {
     const parsed = StoreSchema.safeParse(req.body);
@@ -40,15 +53,13 @@ app.post("/store/createstore", async (req: Request, res: Response) => {
         .json({ error: "Invalid inputs", details: parsed.error });
     }
 
-    const { slug, name, ownerId } = parsed.data;
-    const exist = await prisma.store.findFirst({ where: { slug } });
+    const { slug, name, ownerId, description, imageUrl, tags } = parsed.data;
 
-    if (exist) {
-      return res.status(400).json({ error: "Store already exists" });
-    }
+    const exist = await prisma.store.findFirst({ where: { slug } });
+    if (exist) return res.status(400).json({ error: "Store already exists" });
 
     const store = await prisma.store.create({
-      data: { slug, name, ownerId },
+      data: { slug, name, ownerId, description, imageUrl, tags },
     });
 
     return res.status(201).json({ store });
@@ -58,6 +69,7 @@ app.post("/store/createstore", async (req: Request, res: Response) => {
   }
 });
 
+//get store by slug
 app.get("/store/:slug", async (req, res) => {
   try {
     const { slug } = req.params;
@@ -84,21 +96,20 @@ app.get("/stores/:ownerId", async (req, res) => {
 app.put("/store/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const parsed = StoreSchema.partial().safeParse(req.body);
-    if (!parsed.success)
-      return res.status(400).json({ error: "Invalid inputs" });
-    const { name, slug, ownerId } = parsed.data;
+    const parsed = StoreUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res
+        .status(400)
+        .json({ error: "Invalid inputs", details: parsed.error });
+    }
 
     const store = await prisma.store.update({
       where: { id },
-      data: {
-        ...(name !== undefined ? { name } : {}),
-        ...(slug !== undefined ? { slug } : {}),
-        ...(ownerId !== undefined ? { ownerId } : {}),
-      },
+      data: parsed.data as Prisma.StoreUpdateInput,
     });
+
     res.json({ store });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -109,6 +120,87 @@ app.delete("/store/:id", async (req, res) => {
     await prisma.store.delete({ where: { id } });
     res.json({ message: "Store deleted" });
   } catch (err) {
+    res.status(500).json({ error: "Server error" });
+  }
+});
+// create drop
+app.post("/drop/create", async (req: Request, res: Response) => {
+  try {
+    const parsed = DropSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res
+        .status(400)
+        .json({ error: "Invalid inputs", details: parsed.error });
+    }
+
+    const { storeId, title, description, imageUrl, price, productUrl } =
+      parsed.data;
+
+    const drop = await prisma.drop.create({
+      data: { storeId, title, description, imageUrl, price, productUrl },
+    });
+
+    // TODO: notify subscribers here
+
+    return res.json({ drop });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// get all drops of a store
+app.get("/drops/:storeId", async (req, res) => {
+  try {
+    const { storeId } = req.params;
+    const drops = await prisma.drop.findMany({ where: { storeId } });
+    res.json({ drops });
+  } catch {
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// get single drop
+app.get("/drop/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const drop = await prisma.drop.findUnique({ where: { id } });
+    if (!drop) return res.status(404).json({ error: "Drop not found" });
+    res.json({ drop });
+  } catch {
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// update drop
+app.put("/drop/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const parsed = DropUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res
+        .status(400)
+        .json({ error: "Invalid inputs", details: parsed.error });
+    }
+
+    const drop = await prisma.drop.update({
+      where: { id },
+      data: parsed.data as Prisma.DropUpdateInput, // safe thanks to transform
+    });
+
+    res.json({ drop });
+  } catch {
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// delete drop
+app.delete("/drop/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.drop.delete({ where: { id } });
+    res.json({ message: "Drop deleted" });
+  } catch {
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -171,108 +263,5 @@ app.post("/webhook/telegram", async (req: Request, res: Response) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ ok: false });
-  }
-});
-
-// helper: send message
-async function sendMessage(chatId: string | number, text: string) {
-  return axios.post(
-    `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
-    { chat_id: chatId, text }
-  );
-}
-
-// helper: subscribe
-async function handleSubscribe(slug: string, update: any) {
-  const store = await prisma.store.findUnique({ where: { slug } });
-  if (!store) {
-    await sendMessage(update.message.chat.id, `❌ Store '${slug}' not found`);
-    return;
-  }
-  await prisma.subscription.upsert({
-    where: {
-      storeId_platform_externalUserId: {
-        storeId: store.id,
-        platform: "telegram",
-        externalUserId: String(update.message.chat.id),
-      },
-    },
-    create: {
-      storeId: store.id,
-      platform: "telegram",
-      externalUserId: String(update.message.chat.id),
-      username: update.message.chat.username ?? null,
-    },
-    update: {},
-  });
-  await sendMessage(update.message.chat.id, `✅ Subscribed to ${store.name}`);
-}
-
-// helper: unsubscribe
-async function handleUnsubscribe(slug: string, update: any) {
-  const store = await prisma.store.findUnique({ where: { slug } });
-  if (!store) {
-    await sendMessage(update.message.chat.id, `❌ Store '${slug}' not found`);
-    return;
-  }
-  await prisma.subscription.deleteMany({
-    where: {
-      storeId: store.id,
-      platform: "telegram",
-      externalUserId: String(update.message.chat.id),
-    },
-  });
-  await sendMessage(
-    update.message.chat.id,
-    `❌ Unsubscribed from ${store.name}`
-  );
-}
-
-app.post("/drop/create", async (req: Request, res: Response) => {
-  try {
-    const parsed = DropSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res
-        .status(400)
-        .json({ error: "Invalid inputs", details: parsed.error });
-    }
-
-    const { storeId, title, description, imageUrl, price, productUrl } =
-      parsed.data;
-
-    const drop = await prisma.drop.create({
-      data: { storeId, title, description, imageUrl, price, productUrl },
-    });
-
-    // Find subscribers
-    const subs = await prisma.subscription.findMany({
-      where: { storeId, platform: "telegram" },
-    });
-
-    // Fan-out
-    for (const sub of subs) {
-      try {
-        await axios.post(
-          `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendPhoto`,
-          {
-            chat_id: sub.externalUserId,
-            photo: imageUrl,
-            caption: `🔥 New drop: ${title}\n\n${description}`,
-            parse_mode: "HTML",
-          }
-        );
-      } catch (err: any) {
-        console.error(
-          "Failed to notify",
-          sub.externalUserId,
-          err.response?.data || err.message
-        );
-      }
-    }
-
-    return res.json({ drop });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Server error" });
   }
 });
